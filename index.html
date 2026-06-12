@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#101820" />
+  <title>Basha Bridge</title>
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans:wght@400;500;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="app-shell" aria-label="Basha Bridge call translator">
+    <header class="top-bar">
+      <div>
+        <p class="eyebrow">Live call translator</p>
+        <h1>Basha Bridge</h1>
+      </div>
+      <div class="connection-status" id="connectionStatus">
+        <span class="dot"></span>
+        <span class="status-label">Connecting...</span>
+      </div>
+    </header>
+
+    <section class="call-stage" aria-label="Call controls">
+      <div class="contact-stack">
+        <div class="person-card caller">
+          <div class="avatar" id="avatar1"><span>P1</span><div class="avatar-ring"></div></div>
+          <div>
+            <span class="person-label">Person 1 speaks</span>
+            <select class="lang-select" id="langSelect1">
+              <option value="">Loading...</option>
+            </select>
+          </div>
+        </div>
+
+        <button class="swap-button" id="swapLanguages" type="button" title="Swap languages" aria-label="Swap languages">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M7 7h11l-3-3" />
+            <path d="M18 7l-3 3" />
+            <path d="M17 17H6l3 3" />
+            <path d="M6 17l3-3" />
+          </svg>
+        </button>
+
+        <div class="person-card receiver">
+          <div class="avatar" id="avatar2"><span>P2</span><div class="avatar-ring"></div></div>
+          <div>
+            <span class="person-label">Person 2 hears</span>
+            <select class="lang-select" id="langSelect2">
+              <option value="">Loading...</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="call-meter">
+        <span class="call-duration" id="callDuration">00:00</span>
+        <span class="call-label" id="callLabel">Ready for translated calls</span>
+      </div>
+
+      <div class="primary-controls">
+        <button class="icon-action start-call" id="startCall" type="button" title="Start call" aria-label="Start call">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.8 19.8 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.12.9.32 1.77.59 2.61a2 2 0 0 1-.45 2.11L8 9.69a16 16 0 0 0 6.31 6.31l1.25-1.25a2 2 0 0 1 2.11-.45c.84.27 1.71.47 2.61.59A2 2 0 0 1 22 16.92Z" />
+          </svg>
+        </button>
+        <button class="icon-action end-call" id="endCall" type="button" title="End call" aria-label="End call" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4.93 19.07a10 10 0 0 1 14.14 0" />
+            <path d="M8.46 15.54a5 5 0 0 1 7.08 0" />
+            <path d="M12 12h.01" />
+            <path d="M3 3l18 18" />
+          </svg>
+        </button>
+        <button class="icon-action install-action" id="installApp" type="button" title="Install app" aria-label="Install app">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3v12" />
+            <path d="m7 10 5 5 5-5" />
+            <path d="M5 21h14" />
+          </svg>
+        </button>
+      </div>
+    </section>
+
+    <section class="transcript-shell" aria-label="Translated conversation">
+      <div class="transcript-header">
+        <button class="speaker-tab active" data-speaker="person1" id="speakerPerson1" type="button">P1</button>
+        <button class="speaker-tab" data-speaker="person2" id="speakerPerson2" type="button">P2</button>
+        <span class="transcript-title">Live transcript</span>
+      </div>
+
+      <div class="conversation-list" id="combinedMessages">
+        <div class="empty-state">
+          <span class="empty-icon">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+              <path d="M12 19v3" />
+            </svg>
+          </span>
+          <p>Speak, type, or start a call. Each message appears with its translation.</p>
+        </div>
+      </div>
+    </section>
+
+    <form class="compose-bar" id="composeForm">
+      <button class="mic-btn" id="bottomMic" type="button" title="Voice input" aria-label="Voice input">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+          <path d="M12 19v3" />
+        </svg>
+      </button>
+      <textarea id="bottomInput" class="msg-input" placeholder="Message to translate..." rows="1"></textarea>
+      <button class="send-btn" id="bottomSend" type="submit" title="Send" aria-label="Send">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="m22 2-7 20-4-9-9-4Z" />
+          <path d="M22 2 11 13" />
+        </svg>
+      </button>
+    </form>
+  </main>
+
+  <div class="desktop-panels" aria-hidden="true">
+    <div id="messages1"></div>
+    <div id="messages2"></div>
+    <textarea id="input1"></textarea>
+    <textarea id="input2"></textarea>
+    <button id="send1" type="button"></button>
+    <button id="send2" type="button"></button>
+    <button id="mic1" type="button"></button>
+    <button id="mic2" type="button"></button>
+  </div>
+
+  <audio id="remoteAudio" autoplay playsinline></audio>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="app.js"></script>
+</body>
+</html>
