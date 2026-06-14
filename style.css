@@ -288,6 +288,14 @@ h1 {
   background: var(--red);
 }
 
+.mute-action {
+  background: var(--amber);
+}
+
+.mute-action.active {
+  background: var(--red);
+}
+
 .install-action {
   background: var(--teal);
 }

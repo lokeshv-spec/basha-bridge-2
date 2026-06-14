@@ -55,8 +55,12 @@ let languages = FALLBACK_LANGUAGES;
 let peerConnection = null;
 let localStream = null;
 let isCallActive = false;
+let isAudioMuted = false;
+let callRecognition = null;
+let isCallRecognitionActive = false;
 let bottomSpeaker = "person1";
 let deferredInstallPrompt = null;
+let pendingLocalSpeech = null;
 
 const translatingMsg = { person1: null, person2: null };
 
@@ -89,6 +93,7 @@ const remoteAudio = document.getElementById("remoteAudio");
 const callLabelEl = document.getElementById("callLabel");
 const swapLanguagesBtn = document.getElementById("swapLanguages");
 const installAppBtn = document.getElementById("installApp");
+const muteCallBtn = document.getElementById("muteCall");
 
 function connect() {
   clearTimeout(reconnectTimer);
@@ -171,6 +176,10 @@ function handleServerMessage(data) {
       sourceLang: data.sourceLang,
       targetLang: data.targetLang,
     });
+    // Clear pending local speech if this is the result we were waiting for.
+    if (pendingLocalSpeech && pendingLocalSpeech.speaker === speaker && pendingLocalSpeech.text === data.original) {
+      pendingLocalSpeech = null;
+    }
     return;
   }
 
@@ -263,35 +272,191 @@ function removeTranslatingIndicator(panelId) {
   translatingMsg[panelId] = null;
 }
 
-function handleSend(speaker, inputEl) {
+async function translateWithClaude(text, sourceLang, targetLang) {
+  const srcName = languages[sourceLang] || sourceLang;
+  const tgtName = languages[targetLang] || targetLang;
+
+  if (sourceLang === targetLang) return text;
+
+  const response = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-6",
+      max_tokens: 1000,
+      messages: [{
+        role: "user",
+        content: `Translate the following text from ${srcName} to ${tgtName}. Reply with ONLY the translated text, nothing else.\n\n${text}`,
+      }],
+    }),
+  });
+
+  const data = await response.json();
+  const raw = (data.content || []).map(b => b.text || "").join("").trim();
+  return raw || text;
+}
+
+async function handleSend(speaker, inputEl) {
   const text = inputEl.value.trim();
   if (!text) return;
 
-  if (!isConnected) {
-    showToast("Start the Python server to translate");
-    return;
-  }
-
-  const sent = sendMessage({
-    type: "translate",
-    speaker,
-    text,
-    sourceLang: getLang(speaker),
-    targetLang: getOtherLang(speaker),
-  });
-
-  if (!sent) {
-    showToast("Bridge is reconnecting");
-    return;
-  }
+  const sourceLang = getLang(speaker);
+  const targetLang = getOtherLang(speaker);
 
   inputEl.value = "";
   resizeTextarea(inputEl);
+
+  // If WebSocket server is online, use it as usual.
+  if (isConnected) {
+    const sent = sendMessage({ type: "translate", speaker, text, sourceLang, targetLang });
+    if (!sent) showToast("Bridge is reconnecting — using built-in translation");
+    else return;
+  }
+
+  // Fallback: translate directly in the browser via Claude API.
+  showTranslatingIndicator(speaker === "person1" ? "person2" : "person1");
+  pulseAvatar(speaker);
+
+  try {
+    const translated = await translateWithClaude(text, sourceLang, targetLang);
+    removeTranslatingIndicator(speaker === "person1" ? "person2" : "person1");
+    appendMessage(combinedMessages, { speaker, original: text, translated, sourceLang, targetLang });
+  } catch (err) {
+    removeTranslatingIndicator(speaker === "person1" ? "person2" : "person1");
+    showToast("Translation failed — check your connection");
+  }
 }
 
 function resizeTextarea(el) {
   el.style.height = "auto";
   el.style.height = `${Math.min(el.scrollHeight, 130)}px`;
+}
+
+async function sendSpeechText(speaker, text) {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) return false;
+
+  const sourceLang = getLang(speaker);
+  const targetLang = getOtherLang(speaker);
+
+  if (isConnected) {
+    pendingLocalSpeech = { speaker, text: trimmed, sourceLang, targetLang };
+    return sendMessage({ type: "translate", speaker, text: trimmed, sourceLang, targetLang });
+  }
+
+  // Fallback: translate via Claude API directly in the browser.
+  showTranslatingIndicator(speaker === "person1" ? "person2" : "person1");
+  pulseAvatar(speaker);
+
+  try {
+    const translated = await translateWithClaude(trimmed, sourceLang, targetLang);
+    removeTranslatingIndicator(speaker === "person1" ? "person2" : "person1");
+    appendMessage(combinedMessages, { speaker, original: trimmed, translated, sourceLang, targetLang });
+  } catch (err) {
+    removeTranslatingIndicator(speaker === "person1" ? "person2" : "person1");
+    showToast("Translation failed — check your connection");
+  }
+
+  return true;
+}
+
+function startCallSpeechRecognition() {
+  if (!SpeechRecognition || !isCallActive || isCallRecognitionActive) return;
+  isCallRecognitionActive = true;
+
+  const speaker = bottomSpeaker;
+  const langKey = getLang(speaker);
+  const speechLang = SPEECH_LANG_CODES[langKey] || "en-US";
+
+  callRecognition = new SpeechRecognition();
+  callRecognition.lang = speechLang;
+  callRecognition.continuous = true;
+  callRecognition.interimResults = true;
+
+  let callLiveBubble = null;
+
+  function showCallLiveBubble(text) {
+    clearEmptyState(combinedMessages);
+    if (!callLiveBubble) {
+      callLiveBubble = document.createElement("article");
+      callLiveBubble.className = `message-group from-${speaker} live-bubble`;
+      combinedMessages.appendChild(callLiveBubble);
+    }
+    callLiveBubble.innerHTML = `
+      <div class="msg-bubble msg-original" style="opacity:0.7;font-style:italic;">
+        <div class="msg-label" style="display:flex;align-items:center;gap:6px;">
+          <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--red);animation:recording-pulse 1s ease-in-out infinite;"></span>
+          ${speaker === "person1" ? "P1" : "P2"} speaking…
+        </div>
+        ${escapeHtml(text)}
+      </div>`;
+    combinedMessages.scrollTop = combinedMessages.scrollHeight;
+  }
+
+  function removeCallLiveBubble() {
+    if (callLiveBubble) { callLiveBubble.remove(); callLiveBubble = null; }
+  }
+
+  callRecognition.onresult = (event) => {
+    let interimTranscript = "";
+    let finalTranscript = "";
+
+    for (let i = event.resultIndex; i < event.results.length; i += 1) {
+      const result = event.results[i];
+      const transcript = result[0].transcript;
+      if (result.isFinal) {
+        finalTranscript += `${transcript} `;
+      } else {
+        interimTranscript += transcript;
+      }
+    }
+
+    const liveText = interimTranscript || finalTranscript;
+    if (liveText.trim()) showCallLiveBubble(liveText.trim());
+
+    bottomInput.value = interimTranscript;
+    resizeTextarea(bottomInput);
+
+    if (finalTranscript.trim()) {
+      removeCallLiveBubble();
+      sendSpeechText(speaker, finalTranscript.trim());
+      bottomInput.value = "";
+      resizeTextarea(bottomInput);
+    }
+  };
+
+  callRecognition.onend = () => {
+    if (!isCallActive) {
+      isCallRecognitionActive = false;
+      return;
+    }
+    try {
+      callRecognition.start();
+    } catch (error) {
+      isCallRecognitionActive = false;
+    }
+  };
+
+  callRecognition.onerror = (event) => {
+    showToast(`Call recognition error: ${event.error}`);
+  };
+
+  callRecognition.start();
+  bottomMic.classList.add("recording");
+  bottomMic.setAttribute("aria-label", "Mic active — listening");
+}
+
+function stopCallSpeechRecognition() {
+  if (!callRecognition) return;
+  try {
+    callRecognition.stop();
+  } catch (error) {
+    // ignore stop errors
+  }
+  callRecognition = null;
+  isCallRecognitionActive = false;
+  bottomMic.classList.remove("recording");
+  bottomMic.setAttribute("aria-label", "Voice input");
 }
 
 send1.addEventListener("click", () => handleSend("person1", input1));
@@ -341,8 +506,37 @@ function setupMic(micBtn, inputEl, speaker, langSelect) {
 
   let recognition = null;
   let isRecording = false;
+  let liveBubble = null;
+
+  function showLiveBubble(speakerKey, text) {
+    clearEmptyState(combinedMessages);
+    if (!liveBubble) {
+      liveBubble = document.createElement("article");
+      liveBubble.className = `message-group from-${speakerKey} live-bubble`;
+      combinedMessages.appendChild(liveBubble);
+    }
+    liveBubble.innerHTML = `
+      <div class="msg-bubble msg-original" style="opacity:0.7;font-style:italic;">
+        <div class="msg-label" style="display:flex;align-items:center;gap:6px;">
+          <span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--red);animation:recording-pulse 1s ease-in-out infinite;"></span>
+          ${speakerKey === "person1" ? "P1" : "P2"} speaking…
+        </div>
+        ${escapeHtml(text)}
+      </div>`;
+    combinedMessages.scrollTop = combinedMessages.scrollHeight;
+  }
+
+  function removeLiveBubble() {
+    if (liveBubble) {
+      liveBubble.remove();
+      liveBubble = null;
+    }
+  }
 
   micBtn.addEventListener("click", () => {
+    // During an active call, mic is managed automatically — ignore manual taps.
+    if (isCallActive) return;
+
     if (isRecording) {
       recognition.stop();
       return;
@@ -365,19 +559,27 @@ function setupMic(micBtn, inputEl, speaker, langSelect) {
     };
 
     recognition.onresult = (event) => {
-      inputEl.value = Array.from(event.results).map((result) => result[0].transcript).join("");
+      const transcript = Array.from(event.results).map((r) => r[0].transcript).join("");
+      inputEl.value = transcript;
       resizeTextarea(inputEl);
+      if (transcript.trim()) showLiveBubble(speakerKey, transcript);
+    };
+
+    recognition.onspeechend = () => {
+      recognition.stop();
     };
 
     recognition.onend = () => {
       isRecording = false;
       micBtn.classList.remove("recording");
+      removeLiveBubble();
       if (inputEl.value.trim()) handleSend(speakerKey, inputEl);
     };
 
     recognition.onerror = (event) => {
       isRecording = false;
       micBtn.classList.remove("recording");
+      removeLiveBubble();
       showToast(`Mic error: ${event.error}`);
     };
 
@@ -399,7 +601,16 @@ async function createPeerConnection() {
   };
 
   peerConnection.ontrack = (event) => {
-    remoteAudio.srcObject = event.streams[0];
+    const incomingStream = event.streams[0];
+    if (!incomingStream) return;
+
+    const localTrackIds = new Set((localStream?.getAudioTracks() || []).map((track) => track.id));
+    const incomingTrackIds = new Set(incomingStream.getAudioTracks().map((track) => track.id));
+    const isSelfStream = [...incomingTrackIds].some((id) => localTrackIds.has(id));
+
+    if (isSelfStream) return;
+
+    remoteAudio.srcObject = incomingStream;
     remoteAudio.play().catch(() => {});
   };
 
@@ -414,7 +625,9 @@ async function createPeerConnection() {
     }
 
     if (state === "disconnected" || state === "failed" || state === "closed") {
-      hangupCall(false);
+      // Don't send a hangup signal here — either we already sent one, or
+      // the remote already sent one. Just clean up locally.
+      hangupCall(false, false);
     }
   };
 
@@ -429,6 +642,14 @@ async function handleSignal(signal) {
   const { action, payload } = signal || {};
   if (!action || !payload) return;
 
+  if (action === "hangup") {
+    // The remote peer ended the call — end it locally without sending
+    // another hangup signal back (avoids an infinite loop).
+    hangupCall(true, false);
+    showToast("The other person ended the call");
+    return;
+  }
+
   if (action === "offer") {
     await ensureLocalAudio();
     await createPeerConnection();
@@ -441,6 +662,9 @@ async function handleSignal(signal) {
     startCallTimer();
     startCallBtn.disabled = true;
     endCallBtn.disabled = false;
+    muteCallBtn.disabled = false;
+    updateCallMuteState();
+    startCallSpeechRecognition();
   }
 
   if (action === "answer" && peerConnection) {
@@ -458,8 +682,29 @@ async function handleSignal(signal) {
 
 async function ensureLocalAudio() {
   if (localStream) return localStream;
-  localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  localStream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    },
+  });
   return localStream;
+}
+
+function updateCallMuteState() {
+  const muted = isAudioMuted;
+  remoteAudio.muted = muted;
+  muteCallBtn.classList.toggle("active", muted);
+  muteCallBtn.title = muted ? "Unmute call audio" : "Mute call audio";
+  muteCallBtn.setAttribute("aria-label", muted ? "Unmute call audio" : "Mute call audio");
+}
+
+function toggleCallMute() {
+  if (!isCallActive) return;
+  isAudioMuted = !isAudioMuted;
+  updateCallMuteState();
+  showToast(isAudioMuted ? "Call audio muted" : "Call audio unmuted");
 }
 
 function setCallLabel(text) {
@@ -487,6 +732,9 @@ async function startCall() {
     isCallActive = true;
     startCallBtn.disabled = true;
     endCallBtn.disabled = false;
+    muteCallBtn.disabled = false;
+    updateCallMuteState();
+    startCallSpeechRecognition();
     setCallLabel("Calling...");
     startCallTimer();
     showToast("Calling nearby connected device");
@@ -495,7 +743,12 @@ async function startCall() {
   }
 }
 
-function hangupCall(showMessage = true) {
+function hangupCall(showMessage = true, sendSignalToRemote = true) {
+  // Notify the other side so their call ends immediately too.
+  if (sendSignalToRemote && isCallActive) {
+    sendSignal("hangup", { reason: "ended" });
+  }
+
   if (peerConnection) {
     peerConnection.close();
     peerConnection = null;
@@ -508,8 +761,15 @@ function hangupCall(showMessage = true) {
 
   remoteAudio.srcObject = null;
   isCallActive = false;
+  isAudioMuted = false;
+  stopCallSpeechRecognition();
   startCallBtn.disabled = false;
   endCallBtn.disabled = true;
+  muteCallBtn.disabled = true;
+  muteCallBtn.classList.remove("active");
+  muteCallBtn.title = "Mute call audio";
+  muteCallBtn.setAttribute("aria-label", "Mute call audio");
+  remoteAudio.muted = false;
   setCallLabel("Ready for translated calls");
   stopCallTimer();
   durationEl.textContent = "00:00";
@@ -517,6 +777,7 @@ function hangupCall(showMessage = true) {
 }
 
 startCallBtn.addEventListener("click", startCall);
+muteCallBtn.addEventListener("click", toggleCallMute);
 endCallBtn.addEventListener("click", () => hangupCall(true));
 
 function startCallTimer() {

@@ -97,11 +97,11 @@ async def handle_connection(websocket: WebSocketServerProtocol):
 
                 print(f"[{speaker}] {source_lang} -> {target_lang}: {text}")
 
-                await websocket.send(json.dumps({
+                await broadcast({
                     "type": "translating",
                     "speaker": speaker,
                     "original": text,
-                }))
+                }, sender=None)
 
                 loop = asyncio.get_event_loop()
                 translation = await loop.run_in_executor(
@@ -110,14 +110,17 @@ async def handle_connection(websocket: WebSocketServerProtocol):
 
                 print(f"[{speaker}] Result: {translation}")
 
-                await websocket.send(json.dumps({
+                # Send the translation result to ALL clients including the
+                # sender, so the speaking user also sees their own message
+                # and its translation appear in their chat.
+                await broadcast({
                     "type": "translation",
                     "speaker": speaker,
                     "original": text,
                     "translated": translation,
                     "sourceLang": source_lang,
                     "targetLang": target_lang,
-                }))
+                }, sender=None)
 
             except json.JSONDecodeError:
                 await websocket.send(json.dumps({
